@@ -1,0 +1,179 @@
+buildscript {
+    if (project == rootProject) {
+        repositories {
+            google()
+            mavenCentral()
+            jcenter()
+        }
+
+        dependencies {
+            classpath 'com.android.tools.build:gradle:4.2.1'
+        }
+    }
+}
+
+apply plugin: 'com.android.library'
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+
+def getExtOrDefault(name, defaultValue) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : defaultValue
+}
+
+def found = false
+def reactNativeDir = null
+def androidSourcesName = 'React Native sources'
+def parentDir = rootProject.projectDir
+
+if (rootProject.ext.has('reactNativeAndroidRoot')) {
+  reactNativeDir = rootProject.ext.get('reactNativeAndroidRoot')
+} else {
+  reactNativeDir = new File(
+          projectDir,
+          '/../../../node_modules/react-native/android'
+  )
+}
+if (reactNativeDir.exists()) {
+  found = true
+} else {
+  1.upto(5, {
+    if (found) return true
+    parentDir = reactNativeDir.parentFile
+
+    reactNativeDir = new File(
+            parentDir,
+            'node_modules/react-native/android'
+    )
+
+    if (reactNativeDir.exists()) {
+      found = true
+    }
+  })
+}
+android {
+    compileSdkVersion safeExtGet('SimpleJsi_compileSdkVersion', 29)
+    defaultConfig {
+        minSdkVersion safeExtGet('SimpleJsi_minSdkVersion', 16)
+        targetSdkVersion safeExtGet('SimpleJsi_targetSdkVersion', 29)
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-O2 -frtti -fexceptions -Wall -Wno-unused-variable -fstack-protector-all"
+                abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+                arguments "-DDEV_CMAKE=true"
+                // arguments '-DANDROID_STL=c++_shared', "-DNODE_MODULES_DIR=${reactNativeDir.parentFile.parentFile.toString()}"
+                // arguments "-DNODE_MODULES_DIR=${rootDir}..\node_modules"
+            }
+        }
+
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "./CMakeLists.txt"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    lintOptions {
+        disable 'GradleCompatible'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+     packagingOptions {
+    excludes = ["**/libc++_shared.so","**/libjsi.so","**/libreactnativejni.so"]
+  }
+  
+  configurations {
+    extractJNI
+  }
+}
+
+repositories {
+    mavenLocal()
+    // maven {
+    //     // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+    //     url("$rootDir/../node_modules/react-native/android")
+    // }
+    google()
+    mavenCentral()
+    jcenter()
+
+     if (reactNativeDir.exists()) {
+    maven {
+      url reactNativeDir.toString()
+      name androidSourcesName
+    }
+    logger.info(":${project.name}:reactNativeAndroidRoot ${reactNativeDir.canonicalPath}")
+  }
+
+//   if (!found) {
+//     throw new GradleException(
+//             "${project.name}: unable to locate React Native android sources. " +
+//                     "Ensure you have you installed React Native as a dependency in your project and try again."
+//     )
+//   }
+}
+
+dependencies {
+    //noinspection GradleDynamicVersion
+    implementation "com.facebook.react:react-native:+"
+    implementation "com.scottyab:secure-preferences-lib:0.1.4"
+    implementation 'com.google.code.gson:gson:2.8.6'
+
+//   def rnAAR = fileTree(reactNativeDir.toString()).matching({ it.include "**/**/*.aar" }).singleFile
+//   extractJNI(files(rnAAR))  // From node_modules
+}
+
+task extractJNIFiles {
+  
+  doLast {
+    configurations.extractJNI.files.each {
+      def file = it.absoluteFile
+
+      copy {
+        from zipTree(file)
+        into "$buildDir/$file.name"
+        include "jni/**/*"
+      }
+    }
+  }
+}
+
+task extractJNIFilesForRelease {
+  
+  doLast {
+    configurations.extractJNI.files.each {
+      def file = it.absoluteFile
+
+      copy {
+        from zipTree(file)
+        into "$buildDir/$file.name"
+        include "jni/**/*"
+      }
+    }
+  }
+}
+
+
+tasks.whenTaskAdded { task ->
+  if (task.name.contains('generateJsonModelDebug') || task.name.contains('externalNativeBuild')) {
+    task.dependsOn(extractJNIFiles);
+  }
+  // workaround for builds failing in various ci
+  if (task.name.contains('generateJsonModelRelease')) {
+    task.dependsOn(extractJNIFilesForRelease)
+  }
+}
